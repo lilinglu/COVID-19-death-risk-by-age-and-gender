@@ -1,0 +1,211 @@
+---
+title: "2036_Final_Project_Covid"
+author: "Liling Lu"
+date: "12/4/2020"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    number_sections: true
+    toc_depth: '3'
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Project objective
+
+To identify if the COVID-19 death risk differs by age and gender groups in the USA
+
+by answering the following 2 questions:
+
+1. Is the proportion of COVID-19 death differs by age and gender.
+
+2. Is the COVID-19 crude mortality rate differs by age and gender
+
+# Introduction
+
+1. Data resource? knowing which group within a population are most at risk is very crucial. Many related studies have already been done. There are a lot of data resources are open to the public. CDC (Centers for disease Control and Prevention) is one of the most reliable resource. In this project, I gathered the COVID-19 data from CDC API and population data of 2019 from U.S.Census Bureau (https://www.census.gov/newsroom/press-kits/2020/population-estimates-detailed.html). The Covid data is updated weekly about number of COVID-19 deaths and other demographic and geographic information. Provisional death counts are based on death certificate data received and coded by the National Center for Health Statistics as of December 2, 2020. Death counts are delayed and may differ from other published sources.
+
+2. How do I define the risk? There are many measurements to choose from. In this project, crude mortality rate (cmr), proportion of death according to age (death_pro_page) and proportion of death according to gender (death_prop_gender) were used to evaluate the death risk related to COVID-19.
+
+
+
+# Loading libraries and Data
+
+```{r}
+library(jsonlite)
+library(ggplot2)
+library(tidyverse)
+library(readxl)
+library(patchwork)
+library(gridExtra)
+```
+
+COVID-19 data is gathered from cdc api as a json file.
+Population information is downloaded from U.S.Census Bureau and saved as csv file in my computer.
+
+```{r}
+content <- fromJSON("https://data.cdc.gov/resource/9bhg-hcku.json")
+Population <- read.csv(file ="//Users/liling.lu/pitt fall/2036/Final_project/population.csv")
+```
+
+Check the structure of the dataframe, there are totally 1000 observations with 13 variables. All of the variables are kept as characteristic factors.
+
+```{r}
+str(content)
+```
+
+```{r}
+table(content$state)
+length(unique(content$state))
+```
+
+Check how many states are included.
+
+The data set contains information about United States, in addition to 20 states like California and Florida, but hot spots like New York is not included.In this project, only information about united states was analyzed.
+
+```{r}
+table(content$sex)
+head(subset(content,content$sex=="Unknown"))
+```
+
+Except male, female and all sex, noticed that there is another value "unknown" in sex column, which means the gender of death can not be identified.In this project, sex equals "Unknown" was dropped.The results based on male and female maybe a little bit under estimated. And the number of covid_19 deaths of all sexes should be more accurate than male and female specifically.
+
+# Data processing
+
+## Subset dataframe
+
+Then I subset the data frame to just include information about "age_group_new","covid_19_deaths", "sex","influenza_deaths" related to USA.
+
+```{r}
+df_sub <- subset(content, state=="United States"&sex == "All Sexes"|state=="United States"&sex == "Male"|state=="United States"&sex == "Female")
+df <- df_sub[,c("age_group_new","covid_19_deaths", "sex","influenza_deaths")]
+df
+```
+
+If we look carefully, we can find that some age groups overlap with each other. For example 1-4 years and 5-14 years are included in 0-17 years range. So I dropped rows with age_group_new value equals 0-17 years, 18-29 years, 30-49 years, 50-64 years.
+
+```{r}
+df = filter(df, !(age_group_new %in% c("All Ages","0-17 years","18-29 years","30-49 years", "50-64 years")))
+```
+## Changing data type
+
+The data type of "covid_19_deaths" and "influenza_deaths" are changed to numeric.
+
+```{r}
+df <- df %>% mutate(covid_19_deaths = as.numeric(covid_19_deaths), influenza_deaths=as.numeric(influenza_deaths))
+```
+
+## Creating new variables
+
+1. Add column named population 
+
+```{r}
+df$population <-Population$population
+df
+```
+
+2. Add new column named covid_cmr, crude mortality rate (CMR). It’s calculated by dividing the number of covid-19_deaths by the corresponding population, which measures the probability that any individual in the population will die from the disease;
+As this rate is super small, I chose to scale it by multiply 10000 round it to integer. So, lastly, it means number of deaths per 10000 people in general population.
+
+```{r}
+df$covid_cmr <- round(df$covid_19_deaths/df$population *10000,0)
+df
+```
+
+3. Add Column named death_prop_age, which is calculated by dividing the number of covid-19_deaths of specific age group by the total number of deaths for each gender group. The proportion is set as percentage value and rounded to just 1 decimal.
+
+```{r}
+df$death_prop_age[df$sex == "All Sexes"] <- round(df$covid_19_deaths[df$sex == "All Sexes"]/sum(df$covid_19_deaths[df$sex == "All Sexes"])*100,1)
+df$death_prop_age[df$sex == "Male"] <- round(df$covid_19_deaths[df$sex == "Male"]/sum(df$covid_19_deaths[df$sex == "Male"])*100,1)
+df$death_prop_age[df$sex == "Female"] <- round(df$covid_19_deaths[df$sex == "Female"]/sum(df$covid_19_deaths[df$sex == "Female"])*100,1)
+head(df)
+```
+
+4. I also created column age_prop, calculated by dividing the population of each age group by the total population of each gender group. 
+
+```{r}
+df$age_prop [df$sex == "All Sexes"]<- round(df$population[df$sex == "All Sexes"]/sum(df$population[df$sex == "All Sexes"])*100,1)
+df$age_prop [df$sex == "Male"]<- round(df$population[df$sex == "Male"]/sum(df$population[df$sex == "Male"])*100,1)
+df$age_prop [df$sex == "Female"]<- round(df$population[df$sex == "Female"]/sum(df$population[df$sex == "Female"])*100,1)
+df
+```
+
+5. Column named death_prop_gender was added. For example, among all the deaths in age group 35-44 years old, 67.2% of the deaths are male
+
+```{r}
+df_male_female<-subset(df,sex!="All Sexes")
+df_male_female$death_prop_gender[df_male_female$sex == "Male"] <- round(df_male_female$covid_19_deaths[df_male_female$sex == "Male"]/df$covid_19_deaths[df$sex == "All Sexes"]*100,1)
+df_male_female$death_prop_gender[df_male_female$sex == "Female"] <-round( df_male_female$covid_19_deaths[df_male_female$sex == "Female"]/df$covid_19_deaths[df$sex == "All Sexes"]*100,1)
+head(df_male_female)
+```
+
+## Checking missing values
+
+```{r}
+match("TRUE",is.na.data.frame(df))
+```
+
+# Data visualization
+
+## Comparing total number of death trend of influenza and COVID-19 among age and gender group
+
+```{r}
+ggplot(df, aes(x = age_group_new, y = covid_19_deaths, group=sex, color=sex)) +geom_point(size = 3) + geom_line(size = 1) + scale_x_discrete(limits=c("Under 1 year","1-4 years","5-14 years","15-24 years","25-34 years","35-44 years","45-54 years","55-64 years","65-74 years","75-84 years","85 years and over"))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.1))+ggtitle("Number of death trend of COVID-19")+xlab("Age range")+ylab("Number of death")
+```
+
+```{r}
+ggplot(df, aes(x = age_group_new, y = influenza_deaths, group=sex, color=sex)) +geom_point(size = 3) + geom_line(size = 1) + scale_x_discrete(limits=c("Under 1 year","1-4 years","5-14 years","15-24 years","25-34 years","35-44 years","45-54 years","55-64 years","65-74 years","75-84 years","85 years and over"))+ theme(axis.text.x = element_text(angle = 90, vjust = 0.1))+ggtitle("Number of death trend of Influenza")+xlab("Age range")+ylab("Number of death")
+```
+
+Interestingly, the trends for them are highly similar. Both numbers go up as age goes up. This result is inconsistent with CDC report:children younger than 2 years old are especially at high risk for influenza.
+
+## Proportion of coronavirus deaths differs by age & sex in US
+
+This graph shows the proportion of COVID-19 death by age and gender
+
+```{r,fig.width=12.5}
+df_all_sex<-subset(df,sex=="All Sexes")
+p1 <- ggplot(df_all_sex,aes(x=age_group_new, y=age_prop,))+ geom_bar(stat = "identity",position="dodge",fill="cyan")+xlab("Proportion by age")+ylab("Age range")+ggtitle("% Population") + theme(axis.text.x = element_text(angle = 90, vjust = 0.1)) +scale_x_discrete(limits=c("Under 1 year","1-4 years","5-14 years","15-24 years","25-34 years","35-44 years","45-54 years","55-64 years","65-74 years","75-84 years","85 years and over"))+coord_flip()+theme(legend.position = "none",)+geom_text(aes(label = paste0(age_prop,"%")), vjust = 0.5, hjust=0.6)+theme_bw()
+p2 <- ggplot(df_male_female,aes(x=age_group_new, y=death_prop_gender))+ geom_bar(stat = "identity",aes(fill=sex),position="stack")+xlab("Proportion by gender")+ylab("Age range")+ggtitle("% Deaths by gender") + theme(axis.text.x = element_text(angle = 90, vjust = 0.1)) +scale_x_discrete(limits=c("Under 1 year","1-4 years","5-14 years","15-24 years","25-34 years","35-44 years","45-54 years","55-64 years","65-74 years","75-84 years","85 years and over"))+coord_flip()+theme(legend.position = "bottom", panel.grid.major = element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(),axis.ticks = element_blank())+geom_text(aes(label = paste0(death_prop_gender,"%")),  position = position_stack(vjust = .5))+guides(fill=guide_legend(title = ""))+scale_fill_brewer(palette="Pastel1")
+p3 <- ggplot(df_all_sex,aes(x=age_group_new, y=death_prop_age))+ geom_bar(stat = "identity",position="dodge",fill="cyan") +xlab("Proportion by age")+ylab("Age range")+ggtitle("% Deaths") + theme(axis.text.x = element_text(angle = 90, vjust = 0.1)) +ylim(0,35)+scale_x_discrete(limits=c("Under 1 year","1-4 years","5-14 years","15-24 years","25-34 years","35-44 years","45-54 years","55-64 years","65-74 years","75-84 years","85 years and over"))+coord_flip()+theme(legend.position = "none")+geom_text(aes(label = paste0(death_prop_age,"%")), vjust = 0.5, hjust=0.6)+theme_bw()
+p1+p2+p3
+```
+
+This chart above clearly shows that:
+
+1. The population distribution is bell shaped, young kids and old people consist very small fraction.
+
+2. There is a significant trend in the proportion of death among male and female, where male account more than female.Except age range from 1 to 4 years old and 85 years old and over, all the other age groups, we can find that the males account almost the twice death proportion of females (sixties percentage vs thirties percentage). 
+
+2. The third graph shows that death proportion has a positive relationship with age. Not surprisingly, old people who ages 85 and over account for 31% of the whole coronavirus deaths when their population percentage is just 2%. People who ages 65 and above account almost 80% of the whole coronavius deaths, which is consistent to the report of CDC (An astounding 8 out of 10 coronavirus deaths have been adults 65 and older). 
+
+## Crude coronavirus death rate differs by age $ sex in US
+
+For example, if we look at the group 85 years and over, male, the crude mortality rate is 128 per 10000 people, which means every 10000 males in this age group, 128 of them will suffer from COVID-19 death by probability.
+
+```{r,fig.width=15}
+ggplot(df,aes(x=age_group_new, y=covid_cmr,fill=sex))+ geom_bar(stat = "identity",position="dodge", width = 0.8)+ xlab("Different age group")+ylab("Covid-19 crude mortality rate (per 10K people)")+ylim(0,150) +ggtitle("Covid-19 crude mortality rate (per 10K people) by age groups and sex") + theme(axis.text.x = element_text(angle = 90, vjust = 0.1)) +scale_x_discrete(limits=c("Under 1 year","1-4 years","5-14 years","15-24 years","25-34 years","35-44 years","45-54 years","55-64 years","65-74 years","75-84 years","85 years and over"))+geom_text(aes(label = paste0(covid_cmr,"/10K"), vjust = 0.5, hjust=0),position = position_dodge(width=0.9))+theme_classic() +coord_flip()
+```
+
+In the chart, we see a breakdown of the CMR by age group across different gender groups. It shows very large difference of the CMR by age and gender.
+
+1. As I have rounded the CMR to integer, the rates for people ages 34 years old and below are all shown to be zero in the graph. The CMR for these people are super low even they have been infected with COVID-19.
+
+2. By age, CMR has a positive relationship with age. The older, the greater the CMR. People age 85 years old and over have the highest average CMR which is 118 per 10K, followed by people with age range of 75 to 84 years old, they have a average CMR of 42 per 10K people. 
+
+3. By gender, for each group with CMR not equal to zero, we can see that the CMRs of male are significantly greater than female. In some groups like 35-44 years old and 45-54 years old, the CMR of male is twice times of the female. And in age group 25-34 years old, there CMR for male is 1 per 10K while nearly zero for female.
+
+# Conclusion
+
+Both death proportion and CMR gave the same results, unlike many infectious diseases like flu and malaria, which young children are most at risk. For COVID-19, the situation is the opposite. According to the analysis, people ages under 24 are at nearly zero risk of death from COVID (It is death, not infection, infection risk would be higher). Young children are the safest group comparing to other groups. Whereas, the elderly are at the greatest risk of dying, if infected with this virus. Old, male persons are especially at risk of dying of COVID-19.
+
+# limitations
+
+1. The number of death due to COVID-19 is reported number, which I really doubt its accuracy  because of misclassification. People die from other COVID-19 like disease may be classified as COVID-19 death and people die from COVID-19 may also likely to be classified as other reason.
+
+2. A population-based perspective says nothing about the likelihood of dying among those who actually get infected, whose dying risk would be much higher. And people live in different states would have different risk, if we compare people live in New York with people live in Alaska, the answer is very straight forward, Alaska would be much more safer. Further study will include death risk for each state or county.
+
